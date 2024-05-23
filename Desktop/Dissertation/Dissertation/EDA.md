@@ -1,0 +1,467 @@
+
+# Dissertation (i): Exploratory data analysis
+
+The following script contains the exploratory data analysis for my
+dissertation titled ‘A geospatial analysis of terrorism risk across
+Nigeria’. The aim of this EDA is to look at what kind of terrorism is
+occurring in Nigeria, where it is occurring and whether any initial
+patterns/trends can just be visually identified. This will serve as the
+basis for narrowing down the dissertation research scope (time/space).
+
+## Terrorism in Nigeria
+
+``` r
+library(sf)
+library(tmap)
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(raster)
+```
+
+``` r
+nigeria <- read_sf('gadm41_NGA_0.shp')
+states <- read_sf('gadm41_NGA_1.shp')
+LGAs <- read_sf('gadm41_NGA_2.shp')
+global_terrorism <- read.csv('global_terrorism.csv', fileEncoding = "latin1")
+population <- raster('nga_ppp_2020_1km_Aggregated.tif')
+```
+
+Data sources: Shapefile data obtained via GADM: <https://gadm.org>
+Terrorism data obtained via GTD (requires requesting):
+<https://www.start.umd.edu/gtd/> Population data obtained via WorldPop
+(Unconstrained Nigeria 2020 1km):
+<https://hub.worldpop.org/geodata/listing?id=76>
+
+``` r
+# Keeping only necessary columns and doing some renaming for total compatability
+states <- states %>% select(4, 12)
+states <- states %>% 
+  rename(state = NAME_1)
+states <- states %>%
+  mutate(state = ifelse(state == "Federal Capital Territory", "Abuja", state))
+
+LGAs <- LGAs %>% select(5, 7, 14)
+LGAs <- LGAs %>% 
+  rename(state = NAME_1,
+         LGA = NAME_2)
+```
+
+### Temporal nature of attacks: Nigeria
+
+``` r
+nigeria_terrorism <- global_terrorism %>% filter(country_txt == "Nigeria")
+```
+
+``` r
+# Keeping only necessary columns
+nigeria_terrorism <- nigeria_terrorism %>% select(2, 3, 4, 12, 13, 14, 15, 27, 30, 36, 39, 40)
+
+# Removing NAs
+nigeria_terrorism <- nigeria_terrorism[!is.na(nigeria_terrorism$latitude) & !is.na(nigeria_terrorism$longitude), ]
+
+# Converting it into a spatial object
+nigeria_terrorism <- st_as_sf(nigeria_terrorism, coords = c("longitude", "latitude"), crs = 4326, agr = "constant")
+
+# Plotting terrorist incidents by year
+ggplot(nigeria_terrorism, aes(x = iyear)) +
+  geom_bar(fill = "orange") +
+  labs(title = "Number of Terrorism Incidents by Year",
+       x = "Year",
+       y = "Count of Incidents") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) 
+```
+
+![](EDA_files/figure-gfm/Cleaning%20the%20new%20Nigerian%20terrorism%20dataset-1.png)<!-- -->
+
+Based on this, I can see that terrorism really became an issue from 2012
+onwards. However, the Arab Spring begun in 2010 and was a time marked by
+religious conflict and upheaval. As a result, it makes most sense to
+analyse geospatial patterns of terrorism from 2010 to 2020 (the end of
+the dataset), as this accounts for the wider regional conflict that
+would’ve undoubtedbly had spillover effects in Nigeria.
+
+``` r
+# Filtering by the relevant years
+recent_terrorism <- nigeria_terrorism %>% filter(iyear >= 2010 & iyear <= 2020)
+
+# Creating a date column
+recent_terrorism <- recent_terrorism %>%
+  mutate(date = as.Date(paste(iyear, imonth, iday, sep = "-"), format = "%Y-%m-%d"))
+
+# Removing the original separate columns + columns which I later deemed to be unnecessary
+recent_terrorism <- recent_terrorism[, -c(1, 2, 3, 9, 10)]
+
+# Renaming columns for clarity
+recent_terrorism <- recent_terrorism %>% 
+  rename(
+    state = provstate, 
+    attack_type = attacktype1_txt,
+    target_category = targtype1_txt,
+  )
+
+# Removing any NAs at last
+recent_terrorism <- na.omit(recent_terrorism)
+
+# Saving this as a CSV file so I don't need to run this code every time
+write.csv(recent_terrorism, "recent_terrorism.csv", row.names = FALSE)
+```
+
+Now I want to have a better look at what kind of attacks are occurring
+and where they’re taking place. This represents the bulk of the EDA.
+
+### Attack types: Nigeria
+
+``` r
+# Plotting terrorist activity types
+recent_terrorism <- recent_terrorism %>%
+  mutate(attack_type = factor(attack_type, levels = names(sort(table(attack_type), decreasing = TRUE))))
+
+# Plotting the bar chart
+ggplot(recent_terrorism, aes(x = attack_type)) +
+  geom_bar(fill = "orange") +
+  labs(title = "Frequency of attack types",
+       x = "Attack type",
+       y = "Count of Incidents") +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 60, hjust = 1)
+  )
+```
+
+![](EDA_files/figure-gfm/Kinds%20of%20terrorist%20activities%20taking%20place-1.png)<!-- -->
+The most popular terrorist attack style is armed assault, followed by
+bombings/explosion and hostage taking.
+
+### Attack targets: Nigeria
+
+``` r
+# Plotting terrorist attack targets
+recent_terrorism <- recent_terrorism %>%
+  mutate(target_category = factor(target_category, levels = names(sort(table(target_category), decreasing = TRUE))))
+
+# Plotting the bar chart
+ggplot(recent_terrorism, aes(x = target_category)) +
+  geom_bar(fill = "orange") +
+  labs(title = "Attack targets",
+       x = "Target",
+       y = "Count of Incidents") +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 60, hjust = 1)
+  )
+```
+
+![](EDA_files/figure-gfm/Targets%20of%20terrorist%20attacks-1.png)<!-- -->
+Private citizens and property are disproportionately targeted by
+terrorists, suggesting that indeed civilians are disproportionately
+taking on the brunt of attacks.
+
+### Attack success rate: Nigeria
+
+``` r
+# Plotting the success rate of attacks
+recent_terrorism$success <- factor(recent_terrorism$success, 
+                                   levels = c(0, 1), 
+                                   labels = c("Unsuccessful attack", "Successful attack"))
+
+# Create a summary table for the pie chart
+success_summary <- as.data.frame(table(recent_terrorism$success))
+colnames(success_summary) <- c("AttackStatus", "Count")
+
+# Calculate percentages
+success_summary$Percentage <- round(100 * success_summary$Count / sum(success_summary$Count), 1)
+
+# Plotting the pie chart
+ggplot(success_summary, aes(x = "", y = Count, fill = AttackStatus)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y") +
+  theme_void() +
+  labs(title = "Terrorist attack success rate",
+       fill = "Attack status") +
+  scale_fill_manual(values = c("Unsuccessful attack" = "blue", "Successful attack" = "orange")) +
+  geom_text(aes(label = paste0(Percentage, "%")), 
+            position = position_stack(vjust = 0.5))
+```
+
+![](EDA_files/figure-gfm/Success%20rate%20of%20attacks-1.png)<!-- --> Of
+the attacks that are carried out/registered, the vast majority (91%) are
+successful in causing harm.
+
+### Attack distribution: Nigeria
+
+``` r
+# Plotting points of attacks across the country
+ggplot() +
+  geom_sf(data = nigeria, fill = NA, color = "black", size = 1.5) + 
+  geom_sf(data = states, fill = NA, color = "lightgrey") +
+  geom_sf(data = recent_terrorism, color = "orange", size = 0.1) +
+  theme_minimal() +                                       
+  labs(title = "2010-2020 Terrorist Attacks in Nigeria") +
+  theme(
+    panel.grid = element_blank(),        
+    axis.title = element_blank(),        
+    axis.text = element_blank(),          
+    axis.ticks = element_blank(),         
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA)
+  )
+```
+
+![](EDA_files/figure-gfm/Plotting%20attacks%20as%20points%20across%20Nigeria-1.png)<!-- -->
+Clearly, clustering can be seen amongst attacks that have taken place.
+To understand this a bit better, a thematic map will be generated to
+identify high-risk states. To ensure that the map is standardised
+however, terrorist attacks must be plotted as an incident rate.
+
+### Incident rate of attacks: Nigeria
+
+``` r
+# Ensuring they have the same crs
+states <- st_transform(states, crs(population))
+
+# Extracting the population count per state
+population_sum <- function(state, raster) {
+  masked_raster <- mask(raster, state)
+  sum(getValues(masked_raster), na.rm = TRUE)
+}
+
+states$population <- sapply(1:nrow(states), function(i) population_sum(states[i, ], population))
+
+# Creating a data frame that stores state geometries and extracted population data
+states_pop <- st_drop_geometry(states) %>%
+  mutate(geometry = st_as_text(states$geometry))
+```
+
+To create a standarised rate that takes into account population size, I
+will calculate the rate of terrorist attacks per 10,000 people - a
+number selected on the basis of relative population size per state (all
+of which contain \>10,000 citizens)
+
+``` r
+# Creating a data frame of the spatial object (recent_terrorism)
+df <- as.data.frame(recent_terrorism)
+
+# Creating a new data frame with the count of occurrences for each state
+states_attacks <- df %>%
+  group_by(state) %>%
+  summarise(count = n()) %>%
+  ungroup()
+
+# Creating a new dataframe that contains the population plus terrorist attack count plus geometry
+states_terrorism <- states_pop %>%
+  left_join(states_attacks, by = "state")
+
+# Calculate attacks per 10,000 people
+states_terrorism <- states_terrorism %>%
+  mutate(attacks_per_10000 = (count / population) * 10000)
+
+# Convert the geometry column back to sf format if it's not already
+states_terrorism <- st_as_sf(states_terrorism, wkt = "geometry")
+
+# Plotting the rate of attacks 
+ggplot(states_terrorism) +
+  geom_sf(aes(fill = attacks_per_10000)) +
+  scale_fill_gradient(low = "white", high = "orange", name = "Attacks per 10,000 people") +
+  theme_minimal() +
+  labs(title = "Terrorist attack rate by state") +
+  theme(
+    panel.grid = element_blank(),      
+    axis.title = element_blank(),      
+    axis.text = element_blank(),      
+    axis.ticks = element_blank()      
+  )
+```
+
+![](EDA_files/figure-gfm/Calculating%20the%20rate%20of%20attacks%20per%20population%20counts-1.png)<!-- -->
+And to plot this as a bar chart:
+
+``` r
+states_terrorism <- states_terrorism %>%
+  mutate(state = factor(state, levels = state[order(-attacks_per_10000)]))
+
+ggplot(states_terrorism, aes(x = state, y = attacks_per_10000)) +
+  geom_bar(stat = "identity", fill = "orange") +
+  labs(title = "Attack rate by state",
+       x = "State",
+       y = "Rate per 10,000") +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+![](EDA_files/figure-gfm/Plotting%20attacks%20by%20state-1.png)<!-- -->
+Evidently, Borno is disproportionately affected by terrorist attacks. I
+want to now take a closer look at the distribution of terrorist attacks
+per LGA within the state.
+
+## Terrorism in Borno
+
+``` r
+# Obtaining the extent of Borno from the states shapefile
+borno <- states %>% filter(state == "Borno")
+
+# Removing the unnecessary population column 
+borno <- borno[, -c(3)]
+
+# Filtering the LGAs shapefile to obtain just those in Borno
+borno_LGAs <- LGAs %>% filter(state == "Borno")
+
+# Removing the state column 
+borno_LGAs <- borno_LGAs[, -c(1)]
+```
+
+``` r
+# Ensuring the CRS of both the raster and shapefile match
+borno <- st_transform(borno, crs(population))
+
+# Converting the shapefile to a spatial object
+borno_sp <- as(borno, "Spatial")
+
+# Clipping the raster
+population_borno <- mask(population, borno_sp)
+
+# Ensuring the CRS of both the raster and shapefile match
+borno_LGAs <- st_transform(borno_LGAs, crs(population_borno))
+
+# Creating a function to calculate population sum for each LGA
+calculate_population <- function(lga, raster) {
+  # Masking the raster with the LGA geometry
+  masked_raster <- mask(raster, lga)
+  # Calculating the sum of the population within the LGA
+  sum(getValues(masked_raster), na.rm = TRUE)
+}
+
+# Applying the function to each LGA
+borno_LGAs$population <- sapply(1:nrow(borno_LGAs), function(i) calculate_population(borno_LGAs[i, ], population_borno))
+
+# Making the population count a whole number 
+borno_LGAs$population <- round(borno_LGAs$population, 0)
+
+# Plotting the population per LGA
+ggplot(data = borno_LGAs) +
+  geom_sf(aes(fill = population)) +
+  scale_fill_gradient(low = "white", high = "orange", name = "Population", 
+                      labels = scales::comma) +
+  theme_minimal() +
+  labs(title = "Population distribution across Borno",
+       fill = "Population") +
+  theme(
+    panel.grid = element_blank(),      
+    axis.title = element_blank(),      
+    axis.text = element_blank(),      
+    axis.ticks = element_blank()      
+  )
+```
+
+![](EDA_files/figure-gfm/Obtaining%20the%20population%20count%20per%20LGA%20in%20Borno-1.png)<!-- -->
+Finally, I want to look at the distribution of terrorist attacks
+relative to the population in each LGA.
+
+### Attack distribution: Borno
+
+``` r
+# Obtaining only points in Borno
+borno_terrorism <- recent_terrorism %>% filter(state == "Borno")
+
+# Filtering to remove any outliers (ie. points wrongly described as being in Borno)
+borno_terrorism <- st_transform(borno_terrorism, crs(borno))
+
+# Perform spatial intersection to filter points within Borno
+borno_terrorism <- st_intersection(borno_terrorism, borno)
+```
+
+    ## Warning: attribute variables are assumed to be
+    ## spatially constant throughout all geometries
+
+``` r
+# Plotting points of attacks across the country
+ggplot() +
+  geom_sf(data = borno, fill = NA, color = "black", size = 1.5) + 
+  geom_sf(data = borno_LGAs, fill = NA, color = "lightgrey") +
+  geom_sf(data = borno_terrorism, color = "orange", size = 0.1) +
+  theme_minimal() +                                       
+  labs(title = "Attacks across Borno, Nigeria (2010-2020)") +
+  theme(
+    panel.grid = element_blank(),        
+    axis.title = element_blank(),        
+    axis.text = element_blank(),          
+    axis.ticks = element_blank(),         
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA)
+  )
+```
+
+![](EDA_files/figure-gfm/Plotting%20terrorist%20attack%20points%20across%20Borno-1.png)<!-- -->
+\### Incident rate of attacks: Borno
+
+``` r
+# Transforming the CRS of borno_terrorism to match borno_LGAs
+borno_terrorism <- st_transform(borno_terrorism, crs(borno_LGAs))
+
+# Performing a spatial join to associate each attack with an LGA
+attacks_in_LGAs <- st_join(borno_terrorism, borno_LGAs, join = st_within)
+
+# Counting the number of attacks per LGA
+attack_counts <- attacks_in_LGAs %>%
+  group_by(LGA) %>% 
+  summarize(count = n())
+
+# Turning this to a df before joining (dropping the geometry)
+attack_counts_df <- st_drop_geometry(attack_counts)
+
+# Joining the new attack_counts_df to borno_LGAs 
+borno_LGAs <- borno_LGAs %>%
+  left_join(attack_counts_df, by = "LGA") %>%
+  rename(attack_count = count)
+
+# Calculating a rate of attacks per 1,000 people
+borno_LGAs$attack_per_1000 <- (borno_LGAs$attack_count / borno_LGAs$population) * 1000
+
+# Plotting this as a thematic map
+ggplot(borno_LGAs) +
+  geom_sf(aes(fill = attack_per_1000)) +
+  scale_fill_gradient(low = "white", high = "orange", name = "Attacks per 1,000 people") +
+  theme_minimal() +
+  labs(title = "Terrorist attack rate by LGA across Borno state") +
+  theme(
+    panel.grid = element_blank(),      
+    axis.title = element_blank(),      
+    axis.text = element_blank(),      
+    axis.ticks = element_blank()      
+  )
+```
+
+![](EDA_files/figure-gfm/Calculating%20the%20rate%20of%20attacks%20relative%20to%20the%20population%20in%20each%20LGA-1.png)<!-- -->
+And finally, to plot this as a bar chart.
+
+``` r
+borno_LGAs <- borno_LGAs %>%
+  mutate(LGA = factor(LGA, levels = LGA[order(-attack_per_1000)]))
+
+ggplot(borno_LGAs, aes(x = LGA, y = attack_per_1000)) +
+  geom_bar(stat = "identity", fill = "orange") +
+  labs(title = "Attack rate by LGA",
+       x = "LGA",
+       y = "Rate per 1,000") +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+![](EDA_files/figure-gfm/Graphically%20representing%20attacks%20by%20state-1.png)<!-- -->
+It appears that the LGA of Konduga is disproportionately affected by
+terrorist attacks and that the rate of attacks does not follow an
+identical pattern to population density.
