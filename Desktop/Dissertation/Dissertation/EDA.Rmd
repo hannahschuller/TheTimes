@@ -23,7 +23,9 @@ population <- raster('nga_ppp_2020_1km_Aggregated.tif')
 
 Data sources:
 Shapefile data obtained via GADM: https://gadm.org
+
 Terrorism data obtained via GTD (requires requesting): https://www.start.umd.edu/gtd/
+
 Population data obtained via WorldPop (Unconstrained Nigeria 2020 1km): https://hub.worldpop.org/geodata/listing?id=76
 
 ```{r Cleaning the shapefile datasets for ease of joining later}
@@ -410,3 +412,8 @@ ggplot(borno_LGAs, aes(x = LGA, y = attack_per_1000)) +
   )
 ```
 It appears that the LGA of Konduga is disproportionately affected by terrorist attacks and that the rate of attacks does not follow an identical pattern to population density. 
+
+```{r Rendering this as a markdown file}
+rmarkdown::render("EDA.Rmd", output_format = "github_document")
+```
+
