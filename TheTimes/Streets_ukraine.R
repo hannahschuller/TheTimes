@@ -7,6 +7,8 @@ library(stringr)
 library(tidyr)
 library(ggplot2)
 library(leaflet)
+library(leaflet.extras2)
+library(htmltools)
 
 # Defining the URL of the Wikipedia page
 url <- "https://en.wikipedia.org/wiki/List_of_Ukrainian_toponyms_that_were_changed_as_part_of_derussification"
@@ -386,33 +388,15 @@ name_change_raions <- raion %>%
 # Saving as a csv file
 write.csv(name_change_raions, "/Users/hannah/Desktop/TheTimes/TheTimes/name_change_raions.csv", row.names = FALSE)
 
-# Plotting as an interactive map
-# Define color mapping: fill #f6c55e for those with an 'Old name', otherwise white
-name_change_raions <- name_change_raions %>%
-  mutate(fill_color = ifelse(!is.na(`Old name`), "#cc0a06", "white"),
-         popup_text = ifelse(!is.na(`Old name`), 
-                             paste("<b>Old name:</b>", `Old name`, "<br><b>New name:</b>", Raion), 
-                             ""))  
-
-# Create an interactive leaflet map
-leaflet(name_change_raions) %>%
-  addPolygons(
-    fillColor = ~fill_color,  
-    fillOpacity = 0.7,
-    color = "black",          
-    weight = 1,
-    popup = ~popup_text 
-  ) %>%
-  addLegend(
-    colors = c("#cc0a06", "white"),
-    labels = c("Has Old Name", "No Old Name"),
-    title = "Raion Name Changes",
-    position = "bottomright"
-  )
-
 # Producing a dataset containing a count of name changes per raion
 # Combine all oblast datasets into one
-combined_oblasts <- bind_rows(lapply(oblasts, get))
+# combined_oblasts <- bind_rows(lapply(oblasts, get))
+
+# Saving as a csv file
+write.csv(combined_oblasts, "/Users/hannah/Desktop/TheTimes/TheTimes/combined_oblasts.csv", row.names = FALSE)
+
+# Re-reading in data (manually edited some columns outside of R)
+combined_oblasts <- read.csv("/Users/hannah/Desktop/TheTimes/TheTimes/combined_oblasts.csv")
 
 # Count occurrences of each Raion across all oblast datasets
 raion_counts <- combined_oblasts %>%
@@ -442,10 +426,33 @@ combined_oblast_data <- bind_rows(lapply(oblasts, get))
 # Saving as a csv file
 write.csv(combined_oblast_data, "/Users/hannah/Desktop/TheTimes/TheTimes/combined_oblast_data.csv", row.names = FALSE)
 
-# Plot as an interactive map
-# Define color palette: Light Grey to Red (#cc0a06), white for NA
+# Interactive map 1: Raions with name change
+# Define color mapping: fill #f6c55e for those with an 'Old name', otherwise white
+name_change_raions <- name_change_raions %>%
+  mutate(fill_color = ifelse(!is.na(`Old name`), "#cc0a06", "white"),
+         popup_text = ifelse(!is.na(`Old name`), 
+                             paste("<b>Old name:</b>", `Old name`, "<br><b>New name:</b>", Raion), 
+                             ""))  
+
+# Create an interactive leaflet map
+leaflet(name_change_raions) %>%
+  addPolygons(
+    fillColor = ~fill_color,  
+    fillOpacity = 0.7,
+    color = "black",          
+    weight = 1,
+    popup = ~popup_text 
+  ) %>%
+  addLegend(
+    colors = c("#cc0a06", "white"),
+    labels = c("Has Old Name", "No Old Name"),
+    title = "Raion Name Changes",
+    position = "bottomright"
+  )
+
+# Interactive map 2: Number of name changes per raion + reason
 raion_with_counts <- raion_with_counts %>%
-  left_join(combined_oblast_data %>% select(Raion, Type, `Old.Name`, `New.Name`, Notes), by = "Raion")
+  left_join(combined_oblasts %>% select(Raion, Type, `Old.Name`, `New.Name`, Notes), by = "Raion")
 
 # Define color palette: Light Grey to Red (#cc0a06), white for NA
 color_palette <- colorNumeric(
@@ -454,35 +461,81 @@ color_palette <- colorNumeric(
   na.color = "white"                    # NA values appear in white
 )
 
-# Create popups based on 'Raion' match with 'combined_oblast_data'
+# Create hover labels (tooltip with count)
 raion_with_counts <- raion_with_counts %>%
-  mutate(popup_text = ifelse(!is.na(Count),
-                             paste0(
-                               "<b>Toponym change: </b>", Raion, "<br>",
-                               "<b>Type: </b>", coalesce(Type, "Unknown"), "<br>",
-                               "<b>Old name: </b>", coalesce(`Old.Name`, "N/A"), "<br>",
-                               "<b>New name: </b>", coalesce(`New.Name`, "N/A"), "<br>",
-                               "<b>Reason: </b>", coalesce(Notes, "No reason provided")
-                             ), ""))  # Empty string for NA values
+  mutate(hover_text = paste0(
+    "<b>Raion:</b> ", Raion, "<br>",
+    "<b>Count:</b> ", Count
+  ))
 
-# Create an interactive leaflet map WITHOUT a basemap and with a white background
+# Create sidebar pop-up content (clickable detailed info)
+raion_with_counts <- raion_with_counts %>%
+  group_by(Raion) %>%
+  mutate(click_popup = paste0(
+    "<h3>District: ", Raion, "</h3>",  # Title at the top
+    paste0(
+      "<p><b>Type:</b> ", coalesce(Type, "Unknown"),
+      "<br><b>Old Name:</b> ", coalesce(`Old.Name`, "N/A"),
+      "<br><b>New Name:</b> ", coalesce(`New.Name`, "N/A"),
+      "<br><b>Reason:</b> ", coalesce(Notes, "No reason provided"), "</p>"
+    ) %>% paste(collapse = "")  # Collapse all rows for the same Raion
+  )) %>%
+  ungroup()
+
+# Create interactive leaflet map
 leaflet(raion_with_counts, options = leafletOptions(zoomControl = TRUE)) %>%
   addPolygons(
     fillColor = ~color_palette(Count),  # Fill based on Count values
     fillOpacity = 0.8,
     color = "black",        # Thin black borders
     weight = 0.5,           # Reduce border thickness
-    popup = ~popup_text     # Uses joined data for popups
+    label = ~lapply(hover_text, htmltools::HTML),  # Tooltip on hover
+    popup = ~lapply(click_popup, htmltools::HTML)  # Sidebar popup on click
   ) %>%
   addLegend(
     pal = color_palette,
     values = raion_with_counts$Count,
-    title = "Count",
-    position = "bottomright"
+    title = "Number of toponym changes",  # Updated legend title
+    position = "bottomright",
+    na.label = ""  # Remove NA explanation (no text will appear)
   ) %>%
   htmlwidgets::onRender("
     function(el, x) {
       var map = this;
-      map.getContainer().style.background = 'white'; // Set background to white
+
+      // Apply a white background to the map
+      map.getContainer().style.background = 'white';
+
+      // Add a title to the map (aligned to the left, no separator line)
+      var title = document.createElement('div');
+      title.innerHTML = '<h2 style=\"font-family: Arial; text-align: left; margin: 0;\">Toponym changes by district, Ukraine</h2>';
+      title.style.marginBottom = '10px';
+      title.style.backgroundColor = 'white';
+      title.style.padding = '10px';
+      map.getContainer().prepend(title);
+
+      // Apply custom styles to the map
+      var style = document.createElement('style');
+      style.type = 'text/css';
+      style.innerHTML = `
+        .leaflet-popup-content-wrapper {
+          max-height: 300px; /* Standardized height for popups */
+          overflow-y: auto; /* Vertical scroll bar for long content */
+          font-family: Arial; /* Set font to Arial */
+          font-size: 14px;  /* Standardize font size */
+        }
+        .leaflet-popup-content {
+          word-wrap: break-word; /* Ensure long words wrap */
+        }
+        .leaflet-control-layers,
+        .leaflet-bar a,
+        .leaflet-bar a:hover {
+          font-family: Arial; /* Set all map controls to Arial font */
+        }
+        .leaflet-container {
+          font-family: Arial; /* Set map-wide font to Arial */
+        }
+      `;
+      document.getElementsByTagName('head')[0].appendChild(style);
     }
   ")
