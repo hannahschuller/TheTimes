@@ -40,3 +40,7 @@ treemap(genre_counts_post,
         palette = "Set3",
         border.col = "white")
 
+# Saving these as a csv file
+write.csv(genre_counts, "/Users/hannah/Desktop/TheTimes/TheTimes/genre_counts_pre_war.csv", row.names = FALSE)
+
+write.csv(genre_counts_post, "/Users/hannah/Desktop/TheTimes/TheTimes/genre_counts_post_war.csv", row.names = FALSE)
